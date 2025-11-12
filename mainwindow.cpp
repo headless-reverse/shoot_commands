@@ -204,8 +204,19 @@ MainWindow::~MainWindow() {
 
 void MainWindow::setupMenus() {
     QMenu *file = menuBar()->addMenu("&File");
+    QAction *addAct = file->addAction("Add Command...");
+    addAct->setShortcut(QKeySequence(tr("Ctrl+A")));
+    connect(addAct, &QAction::triggered, this, &MainWindow::addCommand);
+    QAction *editAct = file->addAction("Edit Command...");
+    editAct->setShortcut(QKeySequence(tr("Ctrl+E")));
+    connect(editAct, &QAction::triggered, this, &MainWindow::editCommand);    
+    QAction *removeAct = file->addAction("Remove Command");
+    removeAct->setShortcut(QKeySequence(tr("Ctrl+R")));
+    connect(removeAct, &QAction::triggered, this, &MainWindow::removeCommand);    
+    file->addSeparator();    
     QAction *loadAct = file->addAction("Load commands…");
-    QAction *saveAct = file->addAction("Save commands as…");
+    QAction *saveAct = file->addAction("Save commands as…");    
+    file->addSeparator();    
     QAction *quitAct = file->addAction("Quit");
     connect(loadAct, &QAction::triggered, this, [this]{
         QDir startDir = QDir("/usr/local/etc/shoot_commands");
@@ -280,7 +291,7 @@ void MainWindow::setupWorkflowDock() {
 
 QWidget* MainWindow::createControlsWidget() {
     QWidget *w = new QWidget();
-    w->setMinimumHeight(120); /* Zwiększenie minimalnej wysokości */
+    w->setMinimumHeight(90); /* Zwiększenie minimalnej wysokości */
     w->setMinimumWidth(350);        
     auto mainLayout = new QVBoxLayout(w);
     mainLayout->setContentsMargins(5, 5, 5, 5);
@@ -292,9 +303,9 @@ QWidget* MainWindow::createControlsWidget() {
     m_intervalSpinBox = new QSpinBox();
     m_intervalSpinBox->setRange(1, 86400); /* 1 sekunda do 24 godzin */
     m_intervalSpinBox->setValue(5);
-    m_intervalSpinBox->setMaximumWidth(60);
+    m_intervalSpinBox->setMaximumWidth(70);
     timeLayout->addWidget(m_intervalSpinBox);
-    m_periodicToggle = new QCheckBox("Periodic");
+    m_periodicToggle = new QCheckBox("Periodic   1(s)  86400(s)  24h");
     m_periodicToggle->setChecked(true); /* Domyślnie cykliczne */
     timeLayout->addWidget(m_periodicToggle);
     timeLayout->addStretch(1);
@@ -315,7 +326,7 @@ QWidget* MainWindow::createControlsWidget() {
     timeLayout->addWidget(stopTimerBtn);
     mainLayout->addLayout(timeLayout);
     auto btnLayout = new QHBoxLayout();
-    m_rootToggle = new QCheckBox("Run as Root (su -)");
+    m_rootToggle = new QCheckBox("run as root (su -)");
     m_rootToggle->setChecked(m_isRootShell);        
     connect(m_rootToggle, &QCheckBox::checkStateChanged, this, [this](int state) {
         m_isRootShell = (state == Qt::Checked);            
@@ -353,7 +364,8 @@ QWidget* MainWindow::createControlsWidget() {
     });
     btnLayout->addWidget(m_saveBtn);
     mainLayout->addLayout(btnLayout);
-    // Rząd 4: Add, Edit, Remove
+    /*
+    Rząd 4: Add, Edit, Remove
     auto editLayout = new QHBoxLayout();
     auto addBtn = new QPushButton("Add Command");
     connect(addBtn, &QPushButton::clicked, this, &MainWindow::addCommand);
@@ -364,7 +376,8 @@ QWidget* MainWindow::createControlsWidget() {
     auto rmBtn = new QPushButton("Remove Command");
     connect(rmBtn, &QPushButton::clicked, this, &MainWindow::removeCommand);
     editLayout->addWidget(rmBtn);
-    mainLayout->addLayout(editLayout);        
+    mainLayout->addLayout(editLayout);
+    */
     return w;
 }
 
