@@ -98,6 +98,9 @@ private:
     QStringList m_inputHistory;
     int m_inputHistoryIndex = -1;
     bool m_isRootShell = false;
+    QAction *m_addCommandAct = nullptr;
+    QAction *m_editCommandAct = nullptr;
+    QAction *m_removeCommandAct = nullptr;
     QAction *m_viewCategoriesAct = nullptr;
     QAction *m_viewCommandsAct = nullptr;
     QAction *m_viewLogAct = nullptr;
