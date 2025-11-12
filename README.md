@@ -43,7 +43,7 @@ Zapis JSON workflow:
 **runAsRoot** – czy wykonać jako root  
 **stopOnError** – zatrzymać sekwencję jeśli komenda zakończy się błędem  
 
-## ⚠️ Uprawnienia i root
+## ⚠️ Uprawnienia/root
 Aplikacja tworzy katalog /usr/local/etc/shoot_commands/  
 JSON /usr/local/etc/shoot_commands/shoot_commands.json  
 Logi zapisywane w /usr/local/log/shoot_commands.log  
