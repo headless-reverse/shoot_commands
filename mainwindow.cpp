@@ -89,7 +89,7 @@ private:
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     setWindowTitle("shoot_commands");
     resize(1100, 720);
-    ensureJsonPathLocal(); // Zmieniono, aby używać /usr/local/etc
+    ensureJsonPathLocal(); // Zmieniono, aby używać /usr/local/etc/shoot_commands
     m_executor = new CommandExecutor(this);
     m_commandTimer = new QTimer(this);
     connect(m_commandTimer, &QTimer::timeout, this, &MainWindow::executeScheduledCommand);
@@ -208,7 +208,7 @@ void MainWindow::setupMenus() {
     QAction *saveAct = file->addAction("Save commands as…");
     QAction *quitAct = file->addAction("Quit");
     connect(loadAct, &QAction::triggered, this, [this]{
-        QDir startDir = QDir("/usr/local/etc");
+        QDir startDir = QDir("/usr/local/etc/shoot_commands");
         QString fn = QFileDialog::getOpenFileName(
                              this,
                              tr("Load JSON"),
@@ -221,7 +221,7 @@ void MainWindow::setupMenus() {
         }
     });
     connect(saveAct, &QAction::triggered, this, [this]{
-        QDir startDir = QDir("/usr/local/etc");
+        QDir startDir = QDir("/usr/local/etc/shoot_commands");
         QString fn = QFileDialog::getSaveFileName(
                              this,
                              tr("Save JSON"),
@@ -244,7 +244,7 @@ void MainWindow::setupMenus() {
 }
 
 void MainWindow::ensureJsonPathLocal() {
-    m_jsonFile = QDir("/usr/local/etc").filePath("shoot_commands.json");
+    m_jsonFile = QDir("/usr/local/etc/shoot_commands").filePath("shoot_commands.json");
 }
 
 QWidget* MainWindow::createWorkflowTabWidget() {
@@ -369,7 +369,7 @@ QWidget* MainWindow::createControlsWidget() {
 }
 
 void MainWindow::loadWorkflowFile() {
-    QDir startDir = QDir("/usr/local/etc");
+    QDir startDir = QDir("/usr/local/etc/shoot_commands");
     QStringList fns = QFileDialog::getOpenFileNames(
                                              this,
                                              tr("Load Workflow JSON(s)"),
