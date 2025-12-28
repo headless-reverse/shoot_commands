@@ -1,6 +1,7 @@
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
+#include "systemcmd.h"
 #include <QMainWindow>
 #include <QMap>
 #include <QVector>
@@ -26,11 +27,7 @@ class CommandExecutor;
 class QAction;
 class LogDialog;
 class SequenceRunner;
-
-struct SystemCmd {
-    QString command;
-    QString description;
-};
+class QLabel;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -43,31 +40,41 @@ protected:
     bool eventFilter(QObject *obj, QEvent *event) override;
 
 private slots:
+    // UI Slots for Manual Commands
     void onCategoryChanged(QListWidgetItem *current, QListWidgetItem *previous);
     void onCommandSelected(const QModelIndex &current, const QModelIndex &previous);
     void onCommandDoubleClicked(const QModelIndex &index);
     void runCommand();
     void stopCommand();
-    void onOutput(const QString &text);
-    void onError(const QString &text);
-    void onProcessStarted();
-    void onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus);
     void addCommand();
     void editCommand();
     void removeCommand();
     void saveCommands();
-    void loadCommands();
+    void loadCommands();    
+    // Process Slots
+    void onOutput(const QString &text);
+    void onError(const QString &text);
+    void onProcessStarted();
+    void onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus);
+    // General UI Slots
     void restoreDefaultLayout();
-    void showSettingsDialog();
+    void showSettingsDialog();    
+    // Manual Scheduler Slots
     void onScheduleButtonClicked();
     void executeScheduledCommand();
+    // Workflow / Sequence Slots
     void loadWorkflowFile();
     void onSequenceStarted();
     void onSequenceFinished(bool success);
     void onWorkflowCommandExecuting(const QString &cmd, int index, int total);
     void handleWorkflowLog(const QString &text, const QString &color);
+    void showLoadedWorkflow();
+    void startIntervalSequence();
+    void stopIntervalSequence();
+    void updateTimerDisplay();
 
 private:
+    // Components
     QDockWidget *m_dockCategories = nullptr;
     QDockWidget *m_dockCommands = nullptr;
     QDockWidget *m_dockLog = nullptr;
@@ -78,39 +85,47 @@ private:
     QStandardItemModel *m_commandModel = nullptr;
     QSortFilterProxyModel *m_commandProxy = nullptr;
     QLineEdit *m_commandEdit = nullptr;
-    QTextEdit *m_log = nullptr;
+    QTextEdit *m_log = nullptr;    
+    // Control Buttons
     QPushButton *m_runBtn = nullptr;
     QPushButton *m_stopBtn = nullptr;
     QPushButton *m_clearBtn = nullptr;
     QPushButton *m_saveBtn = nullptr;
     QCheckBox *m_rootToggle = nullptr;    
+    // Manual Scheduler Widgets
     QSpinBox *m_intervalSpinBox = nullptr;
     QCheckBox *m_periodicToggle = nullptr;
     QPushButton *m_scheduleBtn = nullptr;
     QTimer *m_commandTimer = nullptr;
     QString m_scheduledCommand;
-    QStringList m_workflowQueue; 
-
+    // Workflow Widgets & Logic
     SequenceRunner *m_sequenceRunner = nullptr;
+    QStringList m_workflowQueue; 
+    QTimer *m_sequenceIntervalTimer = nullptr; 
+    QTimer *m_displayTimer = nullptr;          
+    QDateTime m_nextSequenceTime;
+    QCheckBox *m_sequenceIntervalToggle = nullptr;
+    QSpinBox *m_sequenceIntervalSpinBox = nullptr;
+    QLabel *m_sequenceTimerDisplay = nullptr;
+    QPushButton *m_showJsonBtn = nullptr;
+    // Data & Core
     QMap<QString, QVector<SystemCmd>> m_commands;
     CommandExecutor *m_executor = nullptr;
     QString m_jsonFile = QStringLiteral("shoot_commands.json");
     QStringList m_inputHistory;
     int m_inputHistoryIndex = -1;
     bool m_isRootShell = false;
-    QAction *m_addCommandAct = nullptr;
-    QAction *m_editCommandAct = nullptr;
-    QAction *m_removeCommandAct = nullptr;
+    QSettings m_settings{"shoot_commands", "system_shell"};
+    LogDialog *m_detachedLogDialog = nullptr;
+    // Actions
     QAction *m_viewCategoriesAct = nullptr;
     QAction *m_viewCommandsAct = nullptr;
     QAction *m_viewLogAct = nullptr;
     QAction *m_viewControlsAct = nullptr;
     QAction *m_viewWorkflowAct = nullptr;
-    QSettings m_settings{"shoot_commands", "system_shell"};
-    LogDialog *m_detachedLogDialog = nullptr;
-
+    // Helper Methods
     QWidget* createControlsWidget();
-    QWidget* createWorkflowTabWidget();
+    QWidget* createWorkflowTabWidget(); 
     void setupWorkflowDock();
     void populateCategoryList();
     void populateCommandList(const QString &category);
