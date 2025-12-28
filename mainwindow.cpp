@@ -37,6 +37,7 @@
 #include <QStandardItem>
 #include <QSpinBox>
 #include <QTabWidget>
+#include "nlohmann/json.hpp"
 
 class LogDialog : public QDialog {
 public:
@@ -50,60 +51,64 @@ public:
         m_output->setStyleSheet("background: #000; color: #f0f0f0; border: none; font-family: monospace;");
         layout->addWidget(m_output);
         m_fontSize = m_output->font().pointSize();
-        installEventFilter(this);
-    }
-    void setDocument(QTextDocument *doc) {
-        if (doc) m_output->setDocument(doc);
-    }
+        installEventFilter(this);}
+    void setDocument(QTextDocument *doc) {if (doc) m_output->setDocument(doc);}
     void appendText(const QString &text, const QColor &color = QColor("#f0f0f0")) {
         m_output->setTextColor(color);
         m_output->append(text);
-        m_output->setTextColor(QColor("#f0f0f0"));
-    }
+        m_output->setTextColor(QColor("#f0f0f0"));}
     void clear() { m_output->clear(); }
     QString text() const { return m_output->toPlainText(); }
 protected:
     bool eventFilter(QObject *obj, QEvent *event) override {
-        if (event->type() == QEvent::KeyPress) {
-            QKeyEvent *ke = static_cast<QKeyEvent*>(event);
-            if (ke->modifiers() == Qt::ControlModifier && ke->key() == Qt::Key_C) {
-                return false;
-            }
-        }
-        return QDialog::eventFilter(obj, event);
-    }
+    if (event->type() == QEvent::KeyPress) {QKeyEvent *ke = static_cast<QKeyEvent*>(event);
+    if (ke->modifiers() == Qt::ControlModifier && ke->key() == Qt::Key_C) {return false;}}
+    return QDialog::eventFilter(obj, event);}
     void wheelEvent(QWheelEvent *event) override {
-        if (QApplication::keyboardModifiers() == Qt::ControlModifier) {
-            int delta = event->angleDelta().y();
-            if (delta > 0) m_fontSize = qMin(m_fontSize + 1, 32);
-            else m_fontSize = qMax(m_fontSize - 1, 8);
-            QFont f = m_output->font(); f.setPointSize(m_fontSize); m_output->setFont(f);
-            event->accept();
-        } else QDialog::wheelEvent(event);
-    }
+    if (QApplication::keyboardModifiers() == Qt::ControlModifier) {
+    int delta = event->angleDelta().y();
+    if (delta > 0) m_fontSize = qMin(m_fontSize + 1, 32);
+    else m_fontSize = qMax(m_fontSize - 1, 8);
+    QFont f = m_output->font(); f.setPointSize(m_fontSize); m_output->setFont(f);
+    event->accept();} else QDialog::wheelEvent(event);}
 private:
     QTextEdit *m_output = nullptr;
-    int m_fontSize = 10;
-};
+    int m_fontSize = 10;};
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     setWindowTitle("shoot_commands");
     resize(1100, 720);
-    ensureJsonPathLocal(); // Zmieniono, aby używać /usr/local/etc/shoot_commands
-    m_executor = new CommandExecutor(this);
+    ensureJsonPathLocal();    
+    m_executor = new CommandExecutor(this);    
+    // Manual Schedule Timer
     m_commandTimer = new QTimer(this);
-    connect(m_commandTimer, &QTimer::timeout, this, &MainWindow::executeScheduledCommand);
+    connect(m_commandTimer, &QTimer::timeout, this, &MainWindow::executeScheduledCommand);    
+    // Workflow Sequence Logic
     m_sequenceRunner = new SequenceRunner(m_executor, this);
     connect(m_sequenceRunner, &SequenceRunner::sequenceStarted, this, &MainWindow::onSequenceStarted);
     connect(m_sequenceRunner, &SequenceRunner::sequenceFinished, this, &MainWindow::onSequenceFinished);
     connect(m_sequenceRunner, &SequenceRunner::commandExecuting, this, &MainWindow::onWorkflowCommandExecuting);
-    connect(m_sequenceRunner, &SequenceRunner::logMessage, this, &MainWindow::handleWorkflowLog);
+    connect(m_sequenceRunner, &SequenceRunner::logMessage, this, &MainWindow::handleWorkflowLog);    
+    // Interval Restart Logic (from snippet)
+    connect(m_sequenceRunner, &SequenceRunner::scheduleRestart, this, [this](int interval){
+        m_nextSequenceTime = QDateTime::currentDateTime().addSecs(interval);
+        if (m_sequenceIntervalTimer->isActive()) m_sequenceIntervalTimer->stop();
+        m_sequenceIntervalTimer->setInterval(interval * 1000);
+        m_sequenceIntervalTimer->start();
+    });
+    m_sequenceIntervalTimer = new QTimer(this);
+    m_sequenceIntervalTimer->setSingleShot(true);
+    connect(m_sequenceIntervalTimer, &QTimer::timeout, this, &MainWindow::startIntervalSequence);
+    m_displayTimer = new QTimer(this);
+    m_displayTimer->setInterval(100);
+    connect(m_displayTimer, &QTimer::timeout, this, &MainWindow::updateTimerDisplay);
     m_isRootShell = m_settings.value("isRootShell", false).toBool();
     connect(m_executor, &CommandExecutor::outputReceived, this, &MainWindow::onOutput);
     connect(m_executor, &CommandExecutor::errorReceived, this, &MainWindow::onError);
     connect(m_executor, &CommandExecutor::started, this, &MainWindow::onProcessStarted);
     connect(m_executor, &CommandExecutor::finished, this, &MainWindow::onProcessFinished);
     setupMenus();
+    // --- Construction ---
     m_categoryList = new QListWidget();
     m_categoryList->setSelectionMode(QAbstractItemView::SingleSelection);
     connect(m_categoryList, &QListWidget::currentItemChanged, this, &MainWindow::onCategoryChanged);
@@ -125,16 +130,14 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     m_commandView->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_commandView->header()->setSectionResizeMode(0, QHeaderView::Stretch);
     m_commandView->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
-    m_commandView->setEditTriggers(QAbstractItemView::NoEditTriggers); // Blokowanie edycji
+    m_commandView->setEditTriggers(QAbstractItemView::NoEditTriggers); 
     connect(m_commandView, &QTreeView::doubleClicked, this, &MainWindow::onCommandDoubleClicked);
     connect(m_commandView, &QTreeView::clicked, [this](const QModelIndex &idx){
         QModelIndex s = m_commandProxy->mapToSource(idx);
         if (s.isValid()) {
             QString cmd = m_commandModel->item(s.row(), 0)->text();
             m_commandEdit->setText(cmd);
-            if (m_dockControls) { m_dockControls->setVisible(true); m_dockControls->raise(); if (m_commandEdit) { m_commandEdit->setFocus(); m_commandEdit->selectAll(); } }
-        }
-    });
+            if (m_dockControls) { m_dockControls->setVisible(true); m_dockControls->raise(); if (m_commandEdit) { m_commandEdit->setFocus(); m_commandEdit->selectAll(); } }}});
     m_commandView->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_commandView, &QWidget::customContextMenuRequested, this, [this](const QPoint &pt){
         QModelIndex idx = m_commandView->indexAt(pt);
@@ -146,14 +149,13 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
         menu.addAction("Execute", [this, cmd](){ m_commandEdit->setText(cmd); runCommand(); });
         menu.addAction("Edit", [this, s](){ m_commandView->selectionModel()->clear(); m_commandView->setCurrentIndex(m_commandProxy->mapFromSource(s)); editCommand(); });
         menu.addAction("Remove", [this, s](){ m_commandView->selectionModel()->clear(); m_commandView->setCurrentIndex(m_commandProxy->mapFromSource(s)); removeCommand(); });
-        menu.exec(m_commandView->viewport()->mapToGlobal(pt));
-    });
+        menu.exec(m_commandView->viewport()->mapToGlobal(pt));});
     m_dockCommands = new QDockWidget(tr("Commands"), this);
     m_dockCommands->setObjectName("dockCommands");
     m_dockCommands->setWidget(m_commandView);
     m_dockCommands->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea | Qt::TopDockWidgetArea);
     addDockWidget(Qt::LeftDockWidgetArea, m_dockCommands);
-    splitDockWidget(m_dockCategories, m_dockCommands, Qt::Horizontal);    
+    splitDockWidget(m_dockCategories, m_dockCommands, Qt::Horizontal);
     m_log = new QTextEdit();
     m_log->setReadOnly(true);
     m_log->setStyleSheet("background: #000; color: #f0f0f0; font-family: monospace;");
@@ -161,13 +163,13 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     m_dockLog->setObjectName("dockLog");
     m_dockLog->setWidget(m_log);
     m_dockLog->setAllowedAreas(Qt::BottomDockWidgetArea | Qt::TopDockWidgetArea | Qt::RightDockWidgetArea);
-    addDockWidget(Qt::BottomDockWidgetArea, m_dockLog);    
+    addDockWidget(Qt::BottomDockWidgetArea, m_dockLog);
     m_dockControls = new QDockWidget(tr("Controls"), this); 
     m_dockControls->setObjectName("dockControls");
     m_dockControls->setWidget(createControlsWidget());
     m_dockControls->setAllowedAreas(Qt::TopDockWidgetArea | Qt::RightDockWidgetArea | Qt::LeftDockWidgetArea);
     addDockWidget(Qt::TopDockWidgetArea, m_dockControls);
-    setupWorkflowDock();     
+    setupWorkflowDock();
     m_viewCategoriesAct = m_dockCategories->toggleViewAction();
     m_viewCommandsAct = m_dockCommands->toggleViewAction();
     m_viewLogAct = m_dockLog->toggleViewAction();
@@ -188,19 +190,19 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     populateCategoryList();
     if (m_categoryList->count() > 0) m_categoryList->setCurrentRow(0);
     if (!m_settings.contains("windowState")) {
-        restoreDefaultLayout(); 
-    }    
-    restoreWindowStateFromSettings();    
+        restoreDefaultLayout();}
+    restoreWindowStateFromSettings();
     m_commandView->installEventFilter(this);
     m_categoryList->installEventFilter(this);
     if (m_commandEdit) m_commandEdit->installEventFilter(this);
-}
+    if (m_displayTimer) m_displayTimer->start();}
 
 MainWindow::~MainWindow() {
     if (m_commandTimer && m_commandTimer->isActive()) m_commandTimer->stop();
+    if (m_sequenceIntervalTimer && m_sequenceIntervalTimer->isActive()) m_sequenceIntervalTimer->stop();
+    if (m_displayTimer && m_displayTimer->isActive()) m_displayTimer->stop();
     saveCommands();
-    saveWindowStateToSettings();
-}
+    saveWindowStateToSettings();}
 
 void MainWindow::setupMenus() {
     QMenu *file = menuBar()->addMenu("&File");
@@ -220,29 +222,17 @@ void MainWindow::setupMenus() {
     QAction *quitAct = file->addAction("Quit");
     connect(loadAct, &QAction::triggered, this, [this]{
         QDir startDir = QDir("/usr/local/etc/shoot_commands");
-        QString fn = QFileDialog::getOpenFileName(
-                             this,
-                             tr("Load JSON"),
-                             startDir.path(),
-                             tr("JSON files (*.json);;All files (*)"));
+        QString fn = QFileDialog::getOpenFileName(this, tr("Load JSON"), startDir.path(), tr("JSON files (*.json);;All files (*)"));
         if (!fn.isEmpty()) {
             m_jsonFile = fn;
             loadCommands();
-            populateCategoryList();
-        }
-    });
+            populateCategoryList();}});
     connect(saveAct, &QAction::triggered, this, [this]{
         QDir startDir = QDir("/usr/local/etc/shoot_commands");
-        QString fn = QFileDialog::getSaveFileName(
-                             this,
-                             tr("Save JSON"),
-                             startDir.filePath("shoot_commands.json"),
-                             tr("JSON files (*.json);;All files (*)"));
+        QString fn = QFileDialog::getSaveFileName(this, tr("Save JSON"), startDir.filePath("shoot_commands.json"), tr("JSON files (*.json);;All files (*)"));
         if (!fn.isEmpty()) {
             m_jsonFile = fn;
-            saveCommands();
-        }
-    });
+            saveCommands();}});
     connect(quitAct, &QAction::triggered, this, &QMainWindow::close);
     QMenu *proc = menuBar()->addMenu("&Process");
     QAction *stopAct = proc->addAction("Stop current command");
@@ -251,34 +241,48 @@ void MainWindow::setupMenus() {
     QAction *restoreAct = settings->addAction("Restore default layout");
     connect(restoreAct, &QAction::triggered, this, &MainWindow::restoreDefaultLayout);
     QAction *appSettingsAct = settings->addAction("Application settings...");
-    connect(appSettingsAct, &QAction::triggered, this, &MainWindow::showSettingsDialog);
-}
+    connect(appSettingsAct, &QAction::triggered, this, &MainWindow::showSettingsDialog);}
 
 void MainWindow::ensureJsonPathLocal() {
-    m_jsonFile = QDir("/usr/local/etc/shoot_commands").filePath("shoot_commands.json");
-}
+    m_jsonFile = QDir("/usr/local/etc").filePath("shoot_commands.json");}
 
 QWidget* MainWindow::createWorkflowTabWidget() {
     QWidget *w = new QWidget();
     auto mainLayout = new QVBoxLayout(w);
-    mainLayout->setContentsMargins(5, 5, 5, 5);
-    auto loadLayout = new QHBoxLayout();
-    QPushButton *loadBtn = new QPushButton("Load Workflow JSON...");
-    loadBtn->setStyleSheet("background-color: #8BC34A; color: black;");
+    mainLayout->setContentsMargins(5, 5, 5, 5);    
+    auto loadRunLayout = new QHBoxLayout();    
+    QPushButton *loadBtn = new QPushButton("Load JSON...");
     connect(loadBtn, &QPushButton::clicked, this, &MainWindow::loadWorkflowFile);
-    loadLayout->addWidget(loadBtn);
+    loadRunLayout->addWidget(loadBtn);
+    m_showJsonBtn = new QPushButton("Show JSON");
+    connect(m_showJsonBtn, &QPushButton::clicked, this, &MainWindow::showLoadedWorkflow);
+    loadRunLayout->addWidget(m_showJsonBtn);
     QPushButton *runBtn = new QPushButton("Run Sequence");
     runBtn->setStyleSheet("background-color: #4CAF50; color: black;");
     connect(runBtn, &QPushButton::clicked, m_sequenceRunner, &SequenceRunner::startSequence);
-    loadLayout->addWidget(runBtn);
+    loadRunLayout->addWidget(runBtn);
     QPushButton *stopBtn = new QPushButton("Stop Sequence");
-    stopBtn->setStyleSheet("background-color: #F44336; color: black;");
-    connect(stopBtn, &QPushButton::clicked, m_sequenceRunner, &SequenceRunner::stopSequence);
-    loadLayout->addWidget(stopBtn);
-    mainLayout->addLayout(loadLayout);
-    mainLayout->addStretch(1);
-    return w;
-}
+    stopBtn->setStyleSheet("background-color: #FF0000; color: black;");
+    connect(stopBtn, &QPushButton::clicked, this, &MainWindow::stopIntervalSequence);
+    loadRunLayout->addWidget(stopBtn);    
+    mainLayout->addLayout(loadRunLayout);
+    auto intervalLayout = new QHBoxLayout();    
+    m_sequenceIntervalToggle = new QCheckBox("Interval (s):");
+    connect(m_sequenceIntervalToggle, &QCheckBox::toggled, m_sequenceRunner, &SequenceRunner::setIntervalToggle);
+    intervalLayout->addWidget(m_sequenceIntervalToggle);
+    m_sequenceIntervalSpinBox = new QSpinBox();
+    m_sequenceIntervalSpinBox->setRange(1, 86400);
+    m_sequenceIntervalSpinBox->setValue(60);
+    m_sequenceIntervalSpinBox->setMaximumWidth(70);
+    connect(m_sequenceIntervalSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), m_sequenceRunner, &SequenceRunner::setIntervalValue);
+    intervalLayout->addWidget(m_sequenceIntervalSpinBox);
+    m_sequenceTimerDisplay = new QLabel("Timer Stopped");
+    m_sequenceTimerDisplay->setStyleSheet("color: black; margin-left: 10px;");
+    intervalLayout->addWidget(m_sequenceTimerDisplay);
+    intervalLayout->addStretch(1);    
+    mainLayout->addLayout(intervalLayout);
+    mainLayout->addStretch(1);    
+    return w;}
 
 void MainWindow::setupWorkflowDock() {
     m_dockWorkflow = new QDockWidget(tr("Workflow"), this);
@@ -286,12 +290,11 @@ void MainWindow::setupWorkflowDock() {
     m_dockWorkflow->setWidget(createWorkflowTabWidget());
     m_dockWorkflow->setAllowedAreas(Qt::TopDockWidgetArea | Qt::RightDockWidgetArea | Qt::LeftDockWidgetArea | Qt::BottomDockWidgetArea);    
     addDockWidget(Qt::TopDockWidgetArea, m_dockWorkflow);
-    splitDockWidget(m_dockControls, m_dockWorkflow, Qt::Horizontal);
-}
+    splitDockWidget(m_dockControls, m_dockWorkflow, Qt::Horizontal);}
 
 QWidget* MainWindow::createControlsWidget() {
     QWidget *w = new QWidget();
-    w->setMinimumHeight(90); /* Zwiększenie minimalnej wysokości */
+    w->setMinimumHeight(90); 
     w->setMinimumWidth(350);        
     auto mainLayout = new QVBoxLayout(w);
     mainLayout->setContentsMargins(5, 5, 5, 5);
@@ -301,12 +304,12 @@ QWidget* MainWindow::createControlsWidget() {
     auto timeLayout = new QHBoxLayout();
     timeLayout->addWidget(new QLabel("Interval (s):"));
     m_intervalSpinBox = new QSpinBox();
-    m_intervalSpinBox->setRange(1, 86400); /* 1 sekunda do 24 godzin */
+    m_intervalSpinBox->setRange(1, 86400); 
     m_intervalSpinBox->setValue(5);
     m_intervalSpinBox->setMaximumWidth(70);
     timeLayout->addWidget(m_intervalSpinBox);
     m_periodicToggle = new QCheckBox("Periodic   1(s)  86400(s)  24h");
-    m_periodicToggle->setChecked(true); /* Domyślnie cykliczne */
+    m_periodicToggle->setChecked(true); 
     timeLayout->addWidget(m_periodicToggle);
     timeLayout->addStretch(1);
     m_scheduleBtn = new QPushButton("Schedule");
@@ -314,15 +317,13 @@ QWidget* MainWindow::createControlsWidget() {
     connect(m_scheduleBtn, &QPushButton::clicked, this, &MainWindow::onScheduleButtonClicked);
     timeLayout->addWidget(m_scheduleBtn);
     QPushButton *stopTimerBtn = new QPushButton("Stop Timer");
-    stopTimerBtn->setStyleSheet("background-color: #E68D8D; color: black;");
+    stopTimerBtn->setStyleSheet("background-color: #FF0000; color: black;");
     connect(stopTimerBtn, &QPushButton::clicked, [this]{
         if (m_commandTimer->isActive()) {
             m_commandTimer->stop();
             appendLog("Scheduled command timer stopped by user.", "#E68D8D");
         } else {
-            appendLog("Timer is not currently running.", "#BDBDBD");
-        }
-    });
+            appendLog("Timer is not currently running.", "#BDBDBD");}});
     timeLayout->addWidget(stopTimerBtn);
     mainLayout->addLayout(timeLayout);
     auto btnLayout = new QHBoxLayout();
@@ -330,8 +331,7 @@ QWidget* MainWindow::createControlsWidget() {
     m_rootToggle->setChecked(m_isRootShell);        
     connect(m_rootToggle, &QCheckBox::checkStateChanged, this, [this](int state) {
         m_isRootShell = (state == Qt::Checked);            
-        m_settings.setValue("isRootShell", m_isRootShell);
-    });        
+        m_settings.setValue("isRootShell", m_isRootShell);});
     btnLayout->addWidget(m_rootToggle);
     btnLayout->addSpacing(20);
     m_runBtn = new QPushButton("Execute");
@@ -341,14 +341,13 @@ QWidget* MainWindow::createControlsWidget() {
     connect(m_stopBtn, &QPushButton::clicked, this, &MainWindow::stopCommand);
     btnLayout->addWidget(m_stopBtn);
     m_clearBtn = new QPushButton("Clear Log");
-    connect(m_clearBtn, &QPushButton::clicked, [this](){ m_log->clear(); m_detachedLogDialog->clear(); }); /* Ulepszenie: czyszczenie obu logów */
+    connect(m_clearBtn, &QPushButton::clicked, [this](){ m_log->clear(); m_detachedLogDialog->clear(); }); 
     btnLayout->addWidget(m_clearBtn);
     m_saveBtn = new QPushButton("Save Log .txt");
     connect(m_saveBtn, &QPushButton::clicked, [this](){
         QString defDir = "/usr/local/log";
         QDir d(defDir);
-        if (!d.exists()) QDir().mkpath(defDir);
-        
+        if (!d.exists()) QDir().mkpath(defDir);        
         QString def = QString("shell_log_%1.txt").arg(QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss"));
         QString fn = QFileDialog::getSaveFileName(this, "Save log", d.filePath(def), "Text Files (*.txt);;All Files (*)");
         if (!fn.isEmpty()) {
@@ -358,70 +357,109 @@ QWidget* MainWindow::createControlsWidget() {
                 f.close();
                 QMessageBox::information(this, "Saved", QString("Saved: %1").arg(fn));
             } else {
-                QMessageBox::warning(this, "Error", "Cannot write file");
-            }
-        }
-    });
+                QMessageBox::warning(this, "Error", "Cannot write file");}}});
     btnLayout->addWidget(m_saveBtn);
     mainLayout->addLayout(btnLayout);
-    /*
-    Rząd 4: Add, Edit, Remove
-    auto editLayout = new QHBoxLayout();
-    auto addBtn = new QPushButton("Add Command");
-    connect(addBtn, &QPushButton::clicked, this, &MainWindow::addCommand);
-    editLayout->addWidget(addBtn);
-    auto editBtn = new QPushButton("Edit Command");
-    connect(editBtn, &QPushButton::clicked, this, &MainWindow::editCommand);
-    editLayout->addWidget(editBtn);
-    auto rmBtn = new QPushButton("Remove Command");
-    connect(rmBtn, &QPushButton::clicked, this, &MainWindow::removeCommand);
-    editLayout->addWidget(rmBtn);
-    mainLayout->addLayout(editLayout);
-    */
-    return w;
-}
+    return w;}
 
 void MainWindow::loadWorkflowFile() {
     QDir startDir = QDir("/usr/local/etc/shoot_commands");
-    QStringList fns = QFileDialog::getOpenFileNames(
-                                             this,
-                                             tr("Load Workflow JSON(s)"),
-                                             startDir.path(),
-                                             tr("JSON files (*.json);;All files (*)"));
-    if (!fns.isEmpty()) {        
-        m_workflowQueue = fns; // Zapisujemy całą kolejkę        
-        QString fn = m_workflowQueue.first();
-        if (m_sequenceRunner->loadWorkflow(fn)) {
-             appendLog(QString("Workflow loaded successfully from: %1. (%2 files in queue)").arg(fn).arg(m_workflowQueue.count()), "#8BC34A");
+    QStringList fns = QFileDialog::getOpenFileNames(this, tr("Load Workflow JSON(s)"), startDir.path(), tr("JSON files (*.json);;All files (*)"));
+    if (fns.isEmpty()) return;
+
+    int successfulLoads = 0;
+    QStringList loadedFileNames;
+    for (int i = 0; i < fns.count(); ++i) {
+        const QString &fn = fns.at(i);
+        bool clearExisting = (i == 0);
+        if (m_sequenceRunner->loadWorkflow(fn, clearExisting)) {    
+             successfulLoads++;
+             loadedFileNames.append(QFileInfo(fn).fileName());
         } else {
-             appendLog(QString("Error loading workflow from: %1").arg(fn), "#F44336");
-        }
-    }
+             appendLog(QString("Error loading workflow from: %1").arg(fn), "#F44336");}}
+    if (successfulLoads > 0) {
+         if (fns.count() == 1) {
+             appendLog(QString("Workflow loaded successfully from: %1.").arg(fns.first()), "#8BC34A");
+         } else {
+             appendLog(QString("Successfully loaded %1 workflow files. Files: %2.").arg(successfulLoads).arg(loadedFileNames.join(", ")), "#8BC34A");}}}
+
+void MainWindow::showLoadedWorkflow() {
+    QStringList commands = m_sequenceRunner->getCommandsAsText();
+    QDialog dialog(this);
+    dialog.setWindowTitle("Current Workflow Commands");
+    dialog.resize(600, 400);
+    QVBoxLayout *layout = new QVBoxLayout(&dialog);
+    QTextEdit *textEdit = new QTextEdit();
+    textEdit->setReadOnly(true);
+    textEdit->setFontFamily("Monospace");
+    QString content = "--- TOTAL COMMANDS: " + QString::number(commands.count()) + " ---\n\n";
+    if (commands.isEmpty()) {
+        content += "No commands loaded.";
+    } else {
+        for (int i = 0; i < commands.count(); ++i) {
+            content += QString("[%1] %2\n").arg(i + 1, 2, 10, QChar('0')).arg(commands.at(i));}}
+    textEdit->setText(content);    
+    layout->addWidget(textEdit);
+    QPushButton *closeButton = new QPushButton("Close");
+    connect(closeButton, &QPushButton::clicked, &dialog, &QDialog::accept);
+    layout->addWidget(closeButton);
+    dialog.exec();}
+
+void MainWindow::updateTimerDisplay() {
+    if (m_sequenceIntervalTimer && m_sequenceTimerDisplay) {
+        if (!m_sequenceIntervalTimer->isActive()) {
+            m_sequenceTimerDisplay->setText("Timer Stopped");
+            return;}
+        QDateTime now = QDateTime::currentDateTime();
+        qint64 msToNext = now.msecsTo(m_nextSequenceTime);
+        if (msToNext <= 0) {
+            m_sequenceTimerDisplay->setText("Running / Delay");
+            return;}
+        int totalSeconds = msToNext / 1000;
+        int seconds = totalSeconds % 60;
+        int minutes = (totalSeconds / 60) % 60;
+        int hours = totalSeconds / 3600;
+        QString display = QString("Next run in: %1:%2:%3")
+                              .arg(hours, 2, 10, QChar('0'))
+                              .arg(minutes, 2, 10, QChar('0'))
+                              .arg(seconds, 2, 10, QChar('0'));
+        m_sequenceTimerDisplay->setText(display);}}
+
+void MainWindow::startIntervalSequence() {
+    appendLog("--- WORKFLOW INTERVAL SEQUENCE RESTARTING ---", "#4CAF50");
+    m_sequenceRunner->startSequence();
 }
 
+void MainWindow::stopIntervalSequence() {
+    m_sequenceRunner->stopSequence(true);
+    if (m_sequenceIntervalTimer->isActive()) {
+        m_sequenceIntervalTimer->stop();}
+    if (m_sequenceIntervalToggle->isChecked()) {
+         m_sequenceIntervalToggle->setChecked(false);}
+    updateTimerDisplay();
+    appendLog("--- MANUAL INTERVAL STOP ---", "#F44336");}
+
 void MainWindow::onSequenceStarted() {
-    appendLog("--- HEADLESS SEQUENCE STARTED ---", "#4CAF50");    
+    appendLog("--- HEADLESS SEQUENCE STARTED ---", "#4CAF50");
     if (m_dockWorkflow) {
         m_dockWorkflow->setVisible(true);
-        m_dockWorkflow->raise();        
-    }
-}
+        m_dockWorkflow->raise();}}
 
 void MainWindow::onSequenceFinished(bool success) {
     if (success) {
         appendLog("--- HEADLESS SEQUENCE FINISHED SUCCESSFULLY ---", "#4CAF50");
     } else {
         appendLog("--- HEADLESS SEQUENCE TERMINATED WITH ERROR ---", "#F44336");
-    }
-}
+        if (m_sequenceIntervalToggle->isChecked()) {
+            m_sequenceIntervalToggle->setChecked(false);}
+        if (m_sequenceIntervalTimer->isActive()) {
+            m_sequenceIntervalTimer->stop();}}}
 
 void MainWindow::onWorkflowCommandExecuting(const QString &cmd, int index, int total) {
-    appendLog(QString(">> HEADLESS [%1/%2]: %3").arg(index+1).arg(total).arg(cmd), "#00BCD4");
-}
+    appendLog(QString(">> HEADLESS [%1/%2]: %3").arg(index+1).arg(total).arg(cmd), "#00BCD4");}
 
 void MainWindow::handleWorkflowLog(const QString &text, const QString &color) {
-    appendLog(text, color);
-}
+    appendLog(text, color);}
 
 void MainWindow::onScheduleButtonClicked() {
     const QString cmdText = m_commandEdit->text().trimmed();
@@ -429,48 +467,39 @@ void MainWindow::onScheduleButtonClicked() {
     const bool periodic = m_periodicToggle->isChecked();
     if (cmdText.isEmpty()) {
         QMessageBox::warning(this, "Schedule Error", "Command cannot be empty.");
-        return;
-    }
+        return;}
     bool safeMode = m_settings.value("safeMode", false).toBool();
     if (safeMode && isDestructiveCommand(cmdText)) {
         QMessageBox::warning(this, "Safe mode", "Application is in Safe Mode. Destructive commands are blocked from scheduling.");
-        return;
-    }
+        return;}
     if (m_commandTimer->isActive()) {
         m_commandTimer->stop();
-        appendLog("Previous scheduled command canceled.", "#FFAA66");
-    }
+        appendLog("Previous scheduled command canceled.", "#FFAA66");}
     m_scheduledCommand = cmdText;
     m_commandTimer->setSingleShot(!periodic);
-    m_commandTimer->setInterval(interval * 1000); /* Interwał w milisekundach */
+    m_commandTimer->setInterval(interval * 1000);
     if (periodic) {
         appendLog(QString("Scheduled periodic command: %1 (every %2 s)").arg(cmdText).arg(interval), "#4CAF50");
     } else {
-        appendLog(QString("Scheduled one-shot command: %1 (in %2 s)").arg(cmdText).arg(interval), "#00BCD4");
-    }
-    m_commandTimer->start();
-}
+        appendLog(QString("Scheduled one-shot command: %1 (in %2 s)").arg(cmdText).arg(interval), "#00BCD4");}
+    m_commandTimer->start();}
 
 void MainWindow::executeScheduledCommand() {
     const QString cmdToRun = m_scheduledCommand;
     if (m_commandTimer->isSingleShot()) {
-        m_commandTimer->stop();
-    }       
+        m_commandTimer->stop();}
     m_commandEdit->setText(cmdToRun);
-    runCommand();
-}
+    runCommand();}
 
 void MainWindow::loadCommands() {
     m_commands.clear();
     std::ifstream ifs(m_jsonFile.toStdString());
     if (!ifs.is_open()) {
         QStringList cats = {
-            "System", "systemctl", "config"
-        };
+            "System", "systemctl", "config"};
         for (const QString &c: cats) m_commands.insert(c, {});
         saveCommands();
-        return;
-    }
+        return;}
     try {
         nlohmann::json j;
         ifs >> j;            
@@ -483,19 +512,13 @@ void MainWindow::loadCommands() {
                         SystemCmd c;
                         c.command = QString::fromStdString(cmd_obj.at("command").get<std::string>());
                         c.description = QString::fromStdString(cmd_obj.at("description").get<std::string>());
-                        vec.append(c);
-                    }
-                }
-            }
-            m_commands.insert(category, vec);
-        }
+                        vec.append(c);}}}
+            m_commands.insert(category, vec);}
     } catch (const nlohmann::json::exception& e) {
         QMessageBox::warning(this, "Error JSON", QString("Cannot parse JSON file: %1\nError: %2").arg(m_jsonFile).arg(e.what()));
         QStringList cats = { "System", "systemctl", "config" };
         for (const QString &c: cats) m_commands.insert(c, {});
-        return;
-    }
-}
+        return;}}
 
 void MainWindow::saveCommands() {
     nlohmann::json j_root = nlohmann::json::object();
@@ -504,30 +527,23 @@ void MainWindow::saveCommands() {
         for (const SystemCmd &c: it.value()) {
             j_array.push_back({
                 {"command", c.command.toStdString()},
-                {"description", c.description.toStdString()}
-            });
-        }
-        j_root[it.key().toStdString()] = j_array;
-    }    
+                {"description", c.description.toStdString()}});}
+        j_root[it.key().toStdString()] = j_array;}
     QFileInfo fileInfo(m_jsonFile);
     QString dirPath = fileInfo.absolutePath();
     QDir dir;
     if (!dir.mkpath(dirPath)) {
         QMessageBox::critical(this, "Error Save JSON", QString("Cannot create directory: %1. Check permissions (or run as root).").arg(dirPath));
-        return;
-    }    
+        return;}
     try {
         std::ofstream ofs(m_jsonFile.toStdString());
         if (ofs.is_open()) {
             ofs << j_root.dump(4);
             ofs.close();
         } else {
-            QMessageBox::critical(this, "Error Save JSON", QString("Cannot write JSON: %1. Check permissions (or run as root).").arg(m_jsonFile));
-        }
+            QMessageBox::critical(this, "Error Save JSON", QString("Cannot write JSON: %1. Check permissions (or run as root).").arg(m_jsonFile));}
     } catch (const std::exception& e) {
-        QMessageBox::warning(this, "Error JSON Save", QString("Cannot save JSON file: %1").arg(e.what()));
-    }
-}
+        QMessageBox::warning(this, "Error JSON Save", QString("Cannot save JSON file: %1").arg(e.what()));}}
 
 void MainWindow::populateCategoryList() {
     m_categoryList->clear();
@@ -540,17 +556,14 @@ void MainWindow::populateCommandList(const QString &category) {
     for (const SystemCmd &c: vec) {
         QList<QStandardItem*> row;
         row << new QStandardItem(c.command) << new QStandardItem(c.description);
-        m_commandModel->appendRow(row);
-    }
-    m_commandView->resizeColumnToContents(1);
-}
+        m_commandModel->appendRow(row);}
+    m_commandView->resizeColumnToContents(1);}
 
 void MainWindow::onCategoryChanged(QListWidgetItem *current, QListWidgetItem *) {
     if (!current) return;
     populateCommandList(current->text());
     m_commandEdit->clear();
-    m_inputHistoryIndex = -1;
-}
+    m_inputHistoryIndex = -1;}
 
 void MainWindow::onCommandSelected(const QModelIndex &current, const QModelIndex &) {
     if (!current.isValid()) return;
@@ -558,9 +571,7 @@ void MainWindow::onCommandSelected(const QModelIndex &current, const QModelIndex
     if (s.isValid()) {
         QString cmd = m_commandModel->item(s.row(), 0)->text();
         m_commandEdit->setText(cmd);
-        if (m_dockControls) { m_dockControls->setVisible(true); m_dockControls->raise(); if (m_commandEdit) { m_commandEdit->setFocus(); m_commandEdit->selectAll(); } }
-    }
-}
+        if (m_dockControls) { m_dockControls->setVisible(true); m_dockControls->raise(); if (m_commandEdit) { m_commandEdit->setFocus(); m_commandEdit->selectAll(); } }}}
 
 void MainWindow::onCommandDoubleClicked(const QModelIndex &index) {
     if (!index.isValid()) return;
@@ -568,9 +579,7 @@ void MainWindow::onCommandDoubleClicked(const QModelIndex &index) {
     if (s.isValid()) {
         QString cmd = m_commandModel->item(s.row(), 0)->text();
         m_commandEdit->setText(cmd);
-        runCommand();
-    }
-}
+        runCommand();}}
 
 void MainWindow::runCommand() {
     const QString cmdText = m_commandEdit->text().trimmed();
@@ -578,12 +587,10 @@ void MainWindow::runCommand() {
     bool safeMode = m_settings.value("safeMode", false).toBool();
     if (safeMode && isDestructiveCommand(cmdText)) {
         QMessageBox::warning(this, "Safe mode", "Application is in Safe Mode. Destructive commands are blocked.");
-        return;
-    }
+        return;}
     if (isDestructiveCommand(cmdText)) {
         auto reply = QMessageBox::question(this, "Confirm", QString("Command looks destructive:\n%1\nContinue?").arg(cmdText), QMessageBox::Yes | QMessageBox::No);
-        if (reply != QMessageBox::Yes) return;
-    }
+        if (reply != QMessageBox::Yes) return;}
     if (m_inputHistory.isEmpty() || m_inputHistory.last() != cmdText) m_inputHistory.append(cmdText);
     m_inputHistoryIndex = -1;
     QString program;
@@ -595,32 +602,25 @@ void MainWindow::runCommand() {
     } else {
         program = "/bin/bash";  
         args << "-c" << cmdText;
-        appendLog(QString(">>> user: %1").arg(cmdText), "#FFE066");
-    }    
-    m_executor->runSystemCommand(program, args);
-}
+        appendLog(QString(">>> user: %1").arg(cmdText), "#FFE066");}
+    m_executor->runSystemCommand(program, args);}
 
 void MainWindow::stopCommand() {
     if (m_executor) {
         m_executor->stop();
-        appendLog("Process stopped by user.", "#FFAA66");
-    }
-}
+        appendLog("Process stopped by user.", "#FFAA66");}}
 
 void MainWindow::onOutput(const QString &text) {
     const QStringList lines = text.split('\n');
-    for (const QString &l : lines) if (!l.trimmed().isEmpty()) appendLog(l.trimmed(), "#A9FFAC");
-}
+    for (const QString &l : lines) if (!l.trimmed().isEmpty()) appendLog(l.trimmed(), "#A9FFAC");}
 
 void MainWindow::onError(const QString &text) {
     const QStringList lines = text.split('\n');
     for (const QString &l : lines) if (!l.trimmed().isEmpty()) appendLog(QString("!!! %1").arg(l.trimmed()), "#FF6565");
-    logErrorToFile(text);
-}
+    logErrorToFile(text);}
 
 void MainWindow::onProcessStarted() {
-    appendLog("System command started.", "#8ECAE6");
-}
+    appendLog("System command started.", "#8ECAE6");}
 
 void MainWindow::addCommand() {
     bool ok;
@@ -632,8 +632,7 @@ void MainWindow::addCommand() {
     if (category.isEmpty()) { QMessageBox::warning(this, "No category", "Select a category first."); return; }
     m_commands[category].append({cmd, desc});
     populateCommandList(category);
-    saveCommands();
-}
+    saveCommands();}
 
 void MainWindow::editCommand() {
     QModelIndex idx = m_commandView->currentIndex();
@@ -651,11 +650,9 @@ void MainWindow::editCommand() {
     if (category.isEmpty()) return;
     auto &vec = m_commands[category];
     for (int i=0;i<vec.size();++i) {
-        if (vec[i].command == cmd && vec[i].description == desc) { vec[i].command = ncmd; vec[i].description = ndesc; break; }
-    }
+        if (vec[i].command == cmd && vec[i].description == desc) { vec[i].command = ncmd; vec[i].description = ndesc; break; }}
     populateCommandList(category);
-    saveCommands();
-}
+    saveCommands();}
 
 void MainWindow::removeCommand() {
     QModelIndex idx = m_commandView->currentIndex();
@@ -667,23 +664,19 @@ void MainWindow::removeCommand() {
     if (category.isEmpty()) return;
     auto &vec = m_commands[category];
     for (int i=0;i<vec.size();++i) {
-        if (vec[i].command == cmd) { vec.removeAt(i); break; }
-    }
+        if (vec[i].command == cmd) { vec.removeAt(i); break; }}
     populateCommandList(category);
-    saveCommands();
-}
+    saveCommands();}
 
 void MainWindow::onProcessFinished(int exitCode, QProcess::ExitStatus) {
     appendLog(QString("Process finished. Exit code: %1").arg(exitCode), "#BDBDBD");
-    if (exitCode != 0) appendLog(QString("Command finished with error code: %1").arg(exitCode), "#FF6565");
-}
+    if (exitCode != 0) appendLog(QString("Command finished with error code: %1").arg(exitCode), "#FF6565");}
 
 void MainWindow::appendLog(const QString &text, const QString &color) {
     QString line = text;
     if (!color.isEmpty()) m_log->setTextColor(QColor(color)); else m_log->setTextColor(QColor("#F0F0F0"));
     m_log->append(line);
-    m_log->setTextColor(QColor("#F0F0F0"));
-}
+    m_log->setTextColor(QColor("#F0F0F0"));}
 
 void MainWindow::logErrorToFile(const QString &text) {
     const QString logDir = "/usr/local/log";
@@ -694,40 +687,20 @@ void MainWindow::logErrorToFile(const QString &text) {
     if (f.open(QIODevice::Append | QIODevice::Text)) {
         QTextStream out(&f);
         out << QDateTime::currentDateTime().toString(Qt::ISODate) << " - " << text << "\n";
-        f.close();
-    }
-}
+        f.close();}}
 
 bool MainWindow::isDestructiveCommand(const QString &cmd) {
     QString c = cmd.toLower();
-    return c.contains("rm ") || c.contains("wipe") || c.contains("format") || c.contains("dd ") || c.contains("flashall");
-}
+    return c.contains("rm ") || c.contains("wipe") || c.contains("format") || c.contains("dd ") || c.contains("flashall");}
 
 void MainWindow::navigateHistory(int direction) {
-    if (m_inputHistory.isEmpty()) {
-        return;
-    }
+    if (m_inputHistory.isEmpty()) {return;}
     if (m_inputHistoryIndex == -1) {
-        if (direction == -1) {
-            m_inputHistoryIndex = m_inputHistory.size() - 1;
-        } else {
-            return;
-        }
-    } else {
-        m_inputHistoryIndex += direction;
-        if (m_inputHistoryIndex < 0) {
-            m_inputHistoryIndex = 0;
-            return;
-        }
-        if (m_inputHistoryIndex >= m_inputHistory.size()) {
-            m_commandEdit->clear();
-            m_inputHistoryIndex = -1;
-            return;
-        }
-    }
+    if (direction == -1) {m_inputHistoryIndex = m_inputHistory.size() - 1;} else {return;}} else {m_inputHistoryIndex += direction;
+    if (m_inputHistoryIndex < 0) {m_inputHistoryIndex = 0;return;}
+    if (m_inputHistoryIndex >= m_inputHistory.size()) {m_commandEdit->clear();m_inputHistoryIndex = -1;return;}}
     m_commandEdit->setText(m_inputHistory.at(m_inputHistoryIndex));
-    m_commandEdit->selectAll();
-}
+    m_commandEdit->selectAll();}
 
 void MainWindow::restoreDefaultLayout() {
     m_settings.remove("geometry");
@@ -739,80 +712,45 @@ void MainWindow::restoreDefaultLayout() {
     addDockWidget(Qt::LeftDockWidgetArea, m_dockCommands);
     splitDockWidget(m_dockCategories, m_dockCommands, Qt::Horizontal); 
     addDockWidget(Qt::BottomDockWidgetArea, m_dockLog);
-    saveWindowStateToSettings();
-}
+    saveWindowStateToSettings();}
 
 void MainWindow::showSettingsDialog() {
     SettingsDialog dlg(this);
     dlg.setSafeMode(m_settings.value("safeMode", false).toBool());
     if (dlg.exec() == QDialog::Accepted) {
-        m_settings.setValue("safeMode", dlg.safeMode());
-    }
-}
+        m_settings.setValue("safeMode", dlg.safeMode());}}
 
 void MainWindow::restoreWindowStateFromSettings() {
     if (m_settings.contains("geometry")) restoreGeometry(m_settings.value("geometry").toByteArray());
     if (m_settings.contains("windowState")) restoreState(m_settings.value("windowState").toByteArray());
     m_isRootShell = m_settings.value("isRootShell", false).toBool();
-    if (m_rootToggle) m_rootToggle->setChecked(m_isRootShell);
-}
+    if (m_rootToggle) m_rootToggle->setChecked(m_isRootShell);}
 
 void MainWindow::saveWindowStateToSettings() {
     m_settings.setValue("geometry", saveGeometry());
     m_settings.setValue("windowState", saveState());
-    m_settings.setValue("isRootShell", m_isRootShell);
-}
+    m_settings.setValue("isRootShell", m_isRootShell);}
 
 QModelIndex MainWindow::currentCommandModelIndex() const {
     QModelIndex idx = m_commandView->currentIndex();
     if (!idx.isValid()) return QModelIndex();
-    return m_commandProxy->mapToSource(idx);
-}
+    return m_commandProxy->mapToSource(idx);}
 
 bool MainWindow::eventFilter(QObject *obj, QEvent *event) {
-    if ((obj == m_commandView || obj == m_categoryList || obj == m_commandEdit) && event->type() == QEvent::KeyPress) {
-        QKeyEvent *ke = static_cast<QKeyEvent*>(event);
-        if (obj == m_commandEdit) {
-            if (ke->key() == Qt::Key_Up) {
-                navigateHistory(-1);
-                return true;
-            }
-            if (ke->key() == Qt::Key_Down) {
-                navigateHistory(1);
-                return true;
-            }
-        }        
-        if (ke->key() == Qt::Key_Return || ke->key() == Qt::Key_Enter) {
-            if (obj == m_categoryList) {
-                if (m_commandModel->rowCount() > 0) {
-                    QModelIndex firstIndex = m_commandView->model()->index(0, 0);
-                    if (firstIndex.isValid()) {
-                        m_commandView->setCurrentIndex(firstIndex);
-                        m_commandView->setFocus();
-                        return true;
-                    }
-                }
-                if (m_commandEdit) {
-                    m_commandEdit->setFocus();
-                    return true;
-                }
-            }
-            if (obj == m_commandView) {
-                onCommandDoubleClicked(m_commandView->currentIndex());
-                return true;
-            }
-            if (obj == m_commandEdit) {
-                return false;
-            }
-        }
-        return false;
-    }
-    return QMainWindow::eventFilter(obj, event);
-}
+    if ((obj == m_commandView || obj == m_categoryList || obj == m_commandEdit) && event->type() == QEvent::KeyPress) {QKeyEvent *ke = static_cast<QKeyEvent*>(event);
+    if (obj == m_commandEdit) {
+    if (ke->key() == Qt::Key_Up) {navigateHistory(-1);return true;}
+    if (ke->key() == Qt::Key_Down) {navigateHistory(1);return true;}}
+    if (ke->key() == Qt::Key_Return || ke->key() == Qt::Key_Enter) {
+    if (obj == m_categoryList) {
+    if (m_commandModel->rowCount() > 0) {QModelIndex firstIndex = m_commandView->model()->index(0, 0);
+    if (firstIndex.isValid()) {m_commandView->setCurrentIndex(firstIndex);m_commandView->setFocus();return true;}}
+    if (m_commandEdit) {m_commandEdit->setFocus();return true;}}
+    if (obj == m_commandView) {onCommandDoubleClicked(m_commandView->currentIndex());return true;}
+    if (obj == m_commandEdit) {return false;}}return false;}return QMainWindow::eventFilter(obj, event);}
 
 void MainWindow::closeEvent(QCloseEvent *event) {
     saveWindowStateToSettings();
-    QMainWindow::closeEvent(event);
-}
+    QMainWindow::closeEvent(event);}
 
 #include "mainwindow.moc"
